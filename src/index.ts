@@ -90,12 +90,9 @@ class OLoadTransform extends AuxVisitor {
         return [
           emitConditionalExpression(
             buildNullCheck(n.left),
-            emitAssignmentExpression(
-              n.left,
-              emitCallExpression(
-                buildSymbolAccess(n.left, binarySymbolMap[n.operator]),
-                n.right
-              )
+            emitCallExpression(
+              buildSymbolAccess(n.left, binarySymbolMap[n.operator]),
+              n.right
             ),
             n // fallback on original op
           ),

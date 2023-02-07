@@ -9,14 +9,14 @@ class Point {
     this.y = y;
   }
 
-  [Symbol.plusEq](other) {
+  [Symbol.add](other) {
     return new Point(
       this.x + other.x,
       this.y + other.y
     )
   }
 
-  [Symbol.minusEq](other) {
+  [Symbol.sub](other) {
     return new Point(
       this.x - other.x,
       this.y - other.y
@@ -30,6 +30,8 @@ let p2 = new Point(1, 4);
 p1 += p2; // p1 = (6, 11)
 
 p2 -= p1; // p2 = (-5, -7)
+
+console.log( p1 + p2 );
 
 `;
 

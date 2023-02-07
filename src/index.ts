@@ -1,18 +1,23 @@
 import {
   AuxVisitor,
   emitAssignmentExpression,
+  emitBinaryExpression,
   emitCallExpression,
   emitComputedPropName,
   emitConditionalExpression,
   emitIdentifier,
   emitMemberExpression,
+  emitStringLiteral,
 } from "emitkit";
 import { Expression, Pattern, Program } from "@swc/core";
-
-const symbolMap = {
-  "+=": "plusEq",
-  "-=": "minusEq",
-};
+import {
+  binarySymbolMap,
+  compoundToNormalOp,
+  isBinaryOpSupported,
+  isCompoundOpSupported,
+  isUnaryOpSupported,
+  unarySymbolMap,
+} from "./symbols.js";
 
 const patternToExpr = (expr: Pattern): Expression => {
   const err = () => {
@@ -32,42 +37,101 @@ const patternToExpr = (expr: Pattern): Expression => {
 };
 
 class OLoadTransform extends AuxVisitor {
+  constructor(useSym: boolean) {
+    super();
+    this.useSym = useSym;
+  }
+
+  useSym;
+
   auxVisitExpression(n: Expression): [Expression, boolean] | undefined {
-    if (
-      n.type !== "AssignmentExpression" ||
-      (n.operator !== "+=" && n.operator !== "-=")
-    )
-      return;
+    const buildSymbolAccess = (left: Expression, symbol: string) =>
+      emitMemberExpression(
+        patternToExpr(left),
+        this.useSym
+          ? emitComputedPropName(
+              emitMemberExpression(
+                emitIdentifier("Symbol"),
+                emitIdentifier(symbol)
+              )
+            )
+          : emitIdentifier("$$op" + symbol[0].toUpperCase() + symbol.slice(1))
+      );
 
-    debugger;
+    const buildNullCheck = (expr: Expression) =>
+      emitBinaryExpression(expr, emitIdentifier("null"), "==");
 
-    const symbol = symbolMap[n.operator];
+    switch (n.type) {
+      case "AssignmentExpression":
+        if (!isCompoundOpSupported(n.operator)) return;
 
-    // left[Symbol.(plus|minus)Eq]
-    const symbolAccess = emitMemberExpression(
-      patternToExpr(n.left),
-      emitComputedPropName(
-        emitMemberExpression(emitIdentifier("Symbol"), emitIdentifier(symbol))
-      )
-    );
+        const left = patternToExpr(n.left);
 
-    const ternary = emitConditionalExpression(
-      symbolAccess,
-      emitAssignmentExpression(
-        patternToExpr(n.left),
-        emitCallExpression(symbolAccess, n.right)
-      ),
-      n // fallback on original compound assignment
-    );
+        return [
+          emitConditionalExpression(
+            buildNullCheck(left),
+            emitAssignmentExpression(
+              left,
+              emitCallExpression(
+                buildSymbolAccess(
+                  left,
+                  binarySymbolMap[compoundToNormalOp(n.operator)]
+                ),
+                n.right
+              )
+            ),
+            n // fallback on original compound assignment
+          ),
+          false,
+        ];
 
-    return [
-      ternary,
-      // (as per EmitKit docs) tells the visitor
-      // to ignore transforming child nodes of this
-      // else the ternary consequent causes infinite recursion
-      false,
-    ];
+      case "BinaryExpression":
+        if (!isBinaryOpSupported(n.operator)) return;
+        return [
+          emitConditionalExpression(
+            buildNullCheck(n.left),
+            emitAssignmentExpression(
+              n.left,
+              emitCallExpression(
+                buildSymbolAccess(n.left, binarySymbolMap[n.operator]),
+                n.right
+              )
+            ),
+            n // fallback on original op
+          ),
+          false,
+        ];
+
+      case "UnaryExpression":
+        if (!isUnaryOpSupported(n.operator)) return;
+        return [
+          emitConditionalExpression(
+            buildNullCheck(n.argument),
+            emitAssignmentExpression(
+              n.argument,
+              emitCallExpression(
+                buildSymbolAccess(n.argument, unarySymbolMap[n.operator])
+              )
+            ),
+            n // fallback on original op
+          ),
+          false,
+        ];
+    }
   }
 }
 
-export default (m: Program) => new OLoadTransform().visitProgram(m);
+export default (m: Program) => {
+  // @ts-expect-error
+  m.type = "Script" as string;
+  if (m.type === "Module")
+    m.body.splice(0, 0, {
+      type: "ImportDeclaration",
+      source: emitStringLiteral("swc-plugin-op-overload/runtime.js"),
+      span: { end: 0, ctxt: 0, start: 0 },
+      specifiers: [],
+      typeOnly: false,
+    });
+
+  return new OLoadTransform(m.type === "Module").visitProgram(m);
+};
